@@ -203,6 +203,8 @@ def findnearestneighbors(mycat, allcat):
         # Instead of trimming we based on a fixed cutoff we now just stash
         # that separation value
         # HARDCODED "BUG": I am not using the right distance metric here
+        # although matches are required to be close enough that it is
+        # approximately correct (like better than first order)
         nndist[i] = dist[1]*3600 # convert to arcsec
     mycat.add_column(nndist, name="nndist")
     return mycat

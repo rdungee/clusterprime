@@ -13,7 +13,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Column, Table
 
-import megacamlc as mlc
+import clusterprime as clp
 
 # Setting overwrite to False to prevent overwriting any data that might
 # already exist
@@ -49,17 +49,17 @@ apsize = 2.00
                              including the tables of all the timeseries data)
 
 """
-config = mlc.Config(getcwd(), 'M67', 'added_overlap_flag', apsize)
+config = clp.Config(getcwd(), 'M67', 'added_overlap_flag', apsize)
 """
      -- Example Directory structure --
      in parenthesis now is the directories that existed given the particular
      config created in the line above this comment
 
-     basedir (/home/rdungee/cluster)
-        -> clusterprime (/home/rdungee/cluster/clusterprime)
-        -> datadir (/home/rdungee/cluster/data)
-            -> clustername (/home/rdungee/cluster/data/M67)
-            -> clusternamereduced (/home/rdungee/cluster/data/M67reduce)
+     basedir (/home/rdungee/cluster)                                      ***NOTE USER MADE***
+        -> clusterprime (/home/rdungee/cluster/clusterprime)              ***NOTE USER MADE***
+        -> datadir (/home/rdungee/cluster/data)                           ***NOTE USER MADE***
+            -> clustername (/home/rdungee/cluster/data/M67)               ***NOTE USER MADE***
+            -> clusternamereduced (/home/rdungee/cluster/data/M67reduce)  ***NOTE USER MADE***
                 -> analysis (/home/rdungee/cluster/data/M67reduce/added_overlap_flag)
 
 """
@@ -100,29 +100,54 @@ for obs in newobsdirs:
     pointings = sorted(obs.glob('*.fits.fz'))
     skysub[obs.stem] = pointings
 # Add whats been done to the logger for quick read through later
-logger = mlc.Logger()
+logger = clp.Logger()
 # Run the skysubtraction
 for fitsgroup in skysub:
     print("Running skysubtract for group: ", fitsgroup)
-    mlc.reduce.skysubtract(config, skysub[fitsgroup], fitsgroup, logger, 
+    clp.reduce.skysubtract(config, skysub[fitsgroup], fitsgroup, logger, 
                            overwrite=overwrite)
 
 # **********************
 # *** SOURCE FINDING ***
 # **********************
+# Find all the sources in each chip of each fits files using DAOStarFinder from
+# photutils
+
+# Start by creating a list of all the directories with data we need to process
+# e.g., ['/home/rdungee/cluster/data/M67reduce/obs000/0000000p']
+# where inside that directory (which was created automatically by the previous
+# step) is the sky background subtracted images
 chipdirs = []
 for i in obsis:
     chipdirs.extend(sorted((config.reduce / f'obs{i:03}').glob('*p')))
-# Run source finding
+# Run source finding for each ccd in ccdis, for each directory from the step
+# above
 for chipdir, outdir in zip(chipdirs, chipdirs):
     print(f"Find sources for {chipdir.parent.stem}, {chipdir.stem}")
     for ccdi in ccdis:
         print(f"CCD: {ccdi:02}")
-        mlc.reduce.findsources(chipdir, outdir, ccdi, overwrite=overwrite)
+        clp.reduce.findsources(chipdir, outdir, ccdi, overwrite=overwrite)
+# This produces the untrimmed catalogs, which contain every "source" real or not
+# these catalogs are stored with the sky subtracted image data, in the the
+# reduced data directory subdirs: obsNNN/MMMMMMMp where MMMMMMMp was the filename
+# of the fits file before sky subtraction (this subdir contains a file per ccd
+# that has been reduced so far)
+# The output is simply the table that DAOStarFinder returns, see the photutils
+# docs on this for details on what it contains
 
 # ************************
 # *** CATALOG TRIMMING ***
 # ************************
+# We now trim the catalogs by cross matching against Gaia EDR3.
+# ***NOTE*** if you want to change the catalog, you must change the function
+# readcatalog contained in aperture.py (clusterprime/reduce/photometry/aperture.py)
+# In there the catalog is hardcoded in the first line of the function as
+# cat = Table.read(f"catalogs/{cluster}_gaiaedr3_plus_ps1.csv")
+# a catalog file that you must construct yourself, it needs to have RA/Dec in
+# epoch J2000.0 for comparison with megaprime data, it currently assumes the
+# column names are "ra2k" and "de2k" for them respectively
+
+# First build the input and output directory lists to cycle through
 catdirs = []
 for i in obsis:
     catdirs.extend(sorted((config.reduce / f'obs{i:03}').glob('*p')))
@@ -130,17 +155,38 @@ outdirs = []
 for cd in catdirs:
     outdirs.append(config.analysis / cd.parent.name / cd.name)
 trimsource = zip(catdirs, outdirs)
-# Run trimming
+# Run the trimming, which crossmatches the list from the previous step against
+# the Gaia EDR3 catalog, anything without a match to Gaia is discarded, real or
+# not it will not have astrometry data
 for catdir, outdir in trimsource:
     print(f"Crossmatching sources for {catdir.parent.stem}, {catdir.stem}")
     for ccdi in ccdis:
         print(f"CCD: {ccdi:02}")
-        mlc.reduce.trimsources(config, catdir, outdir, ccdi,
+        clp.reduce.trimsources(config, catdir, outdir, ccdi,
                                overwrite=overwrite)
+# This step creates trimmed catalogs for each ccd in each obs subdir
+# Columns include:
+#  - xcentroid: x pixel centroid of source
+#  - ycentroid: y pixel centroid of source
+#  - racentroid: same but now in RA (deg)
+#  - deccentroid: same but now in Dec (deg)
+#  - gaia_id: the gaia identifier for the source, taken from crossmatching step
+#  - ps1_id: the ps1 identifier if found in the ps1 catalog, -1 otherwise
+# The file is a astropy.table .ecsv format so it also has commented header lines,
+# which contain metadata:
+#  - Skymax: the peak sky value for the chip
+#  - Gain: the detector gain
+#  - Maxlin: the maxlinearity of the detector, for saturation cutoff
+#  - Seeing: the seeing FWHM in pixels of that observation
 
 # ******************
 # *** PHOTOMETRY ***
 # ******************
+# Now compute the aperture photometry, using photutils this is pretty
+# straight forward to do, most of the work now is keeping track of everything
+
+# Start with directory lists again, looking for the trimmed catalogs and their
+# matching reduced images for computing photometry
 catdirs = []
 for i in obsis:
    catdirs.extend(sorted((config.analysis / f'obs{i:03}').glob('*p')))
@@ -150,8 +196,31 @@ for catdir, outdir in phot:
    print(f"Photometrizing {catdir.parent.stem}, {catdir.stem}")
    for ccdi in ccdis:
        print(f"CCD: {ccdi:02}")
-       mlc.reduce.photometrize(config, catdir, outdir, ccdi, 
+       clp.reduce.photometrize(config, catdir, outdir, ccdi, 
                        overwrite=overwrite)
+# This step creates photometry catalogs in the same directory as the catalogs
+# Columns include:
+#  - xcentroid: x pixel centroid of source
+#  - ycentroid: y pixel centroid of source
+#  - gaia_id: the gaia identifier for the source, taken from crossmatching step
+#  - ps1_id: the ps1 identifier if found in the ps1 catalog, -1 otherwise
+#  - flux: the flux in the aperture
+#  - flux_unc: the uncertainty of the flux from error propagation (Poisson, read noise, sky)
+#  - MaskedPix?: if true, bad pixels were in the aperture
+#  - SatPix?: if true, saturated pixels were in aperture
+#  - mag_inst: instrumental magnitude of flux
+#  - mag_unc: uncertainty on mag
+# The file is a astropy.table .ecsv format so it also has commented header lines,
+# which contain metadata:
+#  - Skymax: the peak sky value for the chip
+#  - Gain: the detector gain
+#  - Maxlin: the maxlinearity of the detector, for saturation cutoff
+#  - Seeing: the seeing FWHM in pixels of that observation
+#  - AIRMASS: the airmass of the observation
+#  - EXPTIME: the exposure time of the obs
+#  - MJD-OBS: exposure start time in MJD format
+#  - DATE-OBS: the date of the observation in UTC
+#  - UTC-OBS: the exposure start time in UTC
 
 # *******************
 # *** EPOCH MEANS ***
@@ -163,7 +232,7 @@ for obsdir, outdir in epochmeans:
    print(f"Computing Epoch Means for {obsdir.stem}")
    for ccdi in ccdis:
        print(f"CCD: {ccdi:02}")
-       mlc.reduce.meanofpointings(config, obsdir, outdir, ccdi,
+       clp.reduce.meanofpointings(config, obsdir, outdir, ccdi,
                                   overwrite=overwrite)
 
 # ****************************
@@ -174,7 +243,7 @@ outdir = config.analysis
 print("Making per chip time series tables")
 for ccdi in ccdis:
   print(f"CCD: {ccdi:02}")
-  mlc.reduce.buildtimeseries(config, bychiplcs, outdir, ccdi, 
+  clp.reduce.buildtimeseries(config, bychiplcs, outdir, ccdi, 
                              overwrite=overwrite)
 
 # ***************
@@ -182,7 +251,7 @@ for ccdi in ccdis:
 # ***************
 alltab = sorted(config.analysis.glob('ccd*_ts.ecsv'))
 print("Generating all table")
-mlc.reduce.generatealltab(config, alltab, config.analysis, 106,
+clp.reduce.generatealltab(config, alltab, config.analysis, 106,
                         overwrite=overwrite)
 
 # ****************
@@ -192,7 +261,7 @@ datatabfs = sorted(config.analysis.glob('ccd*_ts.ecsv'))
 metatabfs = sorted(config.analysis.glob('ccd*_metatable.ecsv'))
 indivlcs = list(zip(datatabfs, metatabfs))
 print("Generating Light Curve files")
-mlc.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
+clp.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
 
 # ********************
 # *** PERIODOGRAMS ***
@@ -237,19 +306,19 @@ mlc.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
 #     see, zpc = hdul[0].data[:,5], hdul[0].data[:,6]
 
 #     # Full light curve
-#     period, power, fap_full, oneperlevel = mlc.analyze.gen_periodogram(time, flux, err)
+#     period, power, fap_full, oneperlevel = clp.analyze.gen_periodogram(time, flux, err)
 #     hdu_full = fits.ImageHDU()
 #     hdu_full.header['TYPE'] = 'Full light curve'
 #     hdu_full.data = np.c_[period, power]
 #     hdul.append(hdu_full)
-#     top3_full, peakratios = mlc.analyze.N_maxima(power, 3, period)
+#     top3_full, peakratios = clp.analyze.N_maxima(power, 3, period)
 
-#     mlc.analyze.gen_figure(time, flux, period, power, oneperlevel
+#     clp.analyze.gen_figure(time, flux, period, power, oneperlevel
 #                            , fap_full, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                            , 'Inst. Mag.', 'Time [MJD]', 'mags'
 #                            , (outdir / 'unphased'), err)
-#     phs, foldflux, folderr = mlc.analyze.phase_fold(time, flux, err, top3_full[-1])
-#     mlc.analyze.gen_figure(phs, foldflux, period, power, oneperlevel
+#     phs, foldflux, folderr = clp.analyze.phase_fold(time, flux, err, top3_full[-1])
+#     clp.analyze.gen_figure(phs, foldflux, period, power, oneperlevel
 #                            , fap_full, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                            , 'Inst. Mag.', 'Phase', 'folded'
 #                            , (outdir / 'mags'), folderr)
@@ -267,15 +336,15 @@ mlc.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
 #         top3_sub0 = np.zeros(3)
 #         fap_sub0 = 100.
 #     else:
-#         period, power_sub0, fap_sub0, oneperlevel = mlc.analyze.gen_periodogram(sub0_time, sub0_flux, sub0_err, freq=freqgrid)
-#         top3_sub0, peakratios = mlc.analyze.N_maxima(power_sub0, 3, period)
+#         period, power_sub0, fap_sub0, oneperlevel = clp.analyze.gen_periodogram(sub0_time, sub0_flux, sub0_err, freq=freqgrid)
+#         top3_sub0, peakratios = clp.analyze.N_maxima(power_sub0, 3, period)
 
-#         mlc.analyze.gen_figure(sub0_time, sub0_flux, period, power_sub0, oneperlevel
+#         clp.analyze.gen_figure(sub0_time, sub0_flux, period, power_sub0, oneperlevel
 #                             , fap_sub0, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub0'
 #                             , (outdir / 'unphased'), sub0_err)
-#         phs, foldflux, folderr = mlc.analyze.phase_fold(sub0_time, sub0_flux, sub0_err, top3_sub0[-1])
-#         mlc.analyze.gen_figure(phs, foldflux, period, power_sub0, oneperlevel
+#         phs, foldflux, folderr = clp.analyze.phase_fold(sub0_time, sub0_flux, sub0_err, top3_sub0[-1])
+#         clp.analyze.gen_figure(phs, foldflux, period, power_sub0, oneperlevel
 #                             , fap_sub0, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Phase', 'folded_sub0'
 #                             , (outdir / 'mags'), folderr)
@@ -288,15 +357,15 @@ mlc.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
 #         top3_sub1 = np.zeros(3)
 #         fap_sub1 = 100.
 #     else:
-#         period, power_sub1, fap_sub1, oneperlevel = mlc.analyze.gen_periodogram(sub1_time, sub1_flux, sub1_err, freq=freqgrid)
-#         top3_sub1, peakratios = mlc.analyze.N_maxima(power_sub1, 3, period)
+#         period, power_sub1, fap_sub1, oneperlevel = clp.analyze.gen_periodogram(sub1_time, sub1_flux, sub1_err, freq=freqgrid)
+#         top3_sub1, peakratios = clp.analyze.N_maxima(power_sub1, 3, period)
 
-#         mlc.analyze.gen_figure(sub1_time, sub1_flux, period, power_sub1, oneperlevel
+#         clp.analyze.gen_figure(sub1_time, sub1_flux, period, power_sub1, oneperlevel
 #                             , fap_sub1, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub1'
 #                             , (outdir / 'unphased'), sub1_err)
-#         phs, foldflux, folderr = mlc.analyze.phase_fold(sub1_time, sub1_flux, sub1_err, top3_sub1[-1])
-#         mlc.analyze.gen_figure(phs, foldflux, period, power_sub1, oneperlevel
+#         phs, foldflux, folderr = clp.analyze.phase_fold(sub1_time, sub1_flux, sub1_err, top3_sub1[-1])
+#         clp.analyze.gen_figure(phs, foldflux, period, power_sub1, oneperlevel
 #                             , fap_sub1, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Phase', 'folded_sub1'
 #                             , (outdir / 'mags'), folderr)
@@ -309,34 +378,34 @@ mlc.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
 #         top3_sub2 = np.zeros(3)
 #         fap_sub2 = 100.
 #     else:
-#         period, power_sub2, fap_sub2, oneperlevel = mlc.analyze.gen_periodogram(sub2_time, sub2_flux, sub2_err, freq=freqgrid)
+#         period, power_sub2, fap_sub2, oneperlevel = clp.analyze.gen_periodogram(sub2_time, sub2_flux, sub2_err, freq=freqgrid)
 #         hdu_sub = fits.ImageHDU()
 #         hdu_sub.header['TYPE'] = 'Subsets of LC'
 #         hdu_sub.data = np.c_[period, power_sub0, power_sub1, power_sub2]
 #         hdul.append(hdu_sub)
-#         top3_sub2, peakratios = mlc.analyze.N_maxima(power_sub2, 3, period)
+#         top3_sub2, peakratios = clp.analyze.N_maxima(power_sub2, 3, period)
 
-#         mlc.analyze.gen_figure(sub2_time, sub2_flux, period, power_sub2, oneperlevel
+#         clp.analyze.gen_figure(sub2_time, sub2_flux, period, power_sub2, oneperlevel
 #                             , fap_sub2, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub2'
 #                             , (outdir / 'unphased'), sub2_err)
-#         phs, foldflux, folderr = mlc.analyze.phase_fold(sub2_time, sub2_flux, sub2_err, top3_sub2[-1])
-#         mlc.analyze.gen_figure(phs, foldflux, period, power_sub2, oneperlevel
+#         phs, foldflux, folderr = clp.analyze.phase_fold(sub2_time, sub2_flux, sub2_err, top3_sub2[-1])
+#         clp.analyze.gen_figure(phs, foldflux, period, power_sub2, oneperlevel
 #                             , fap_sub2, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
 #                             , 'Inst. Mag.', 'Phase', 'folded_sub2'
 #                             , (outdir / 'mags'), folderr)
 
 #     # Seeing values
-#     period, power, fap_see, oneperlevel = mlc.analyze.gen_periodogram(time, see)
-#     top1_see, peakratios = mlc.analyze.N_maxima(power, 1, period)
+#     period, power, fap_see, oneperlevel = clp.analyze.gen_periodogram(time, see)
+#     top1_see, peakratios = clp.analyze.N_maxima(power, 1, period)
 #     hdu_full = fits.ImageHDU()
 #     hdu_full.header['TYPE'] = 'Full seeing curve'
 #     hdu_full.data = np.c_[period, power]
 #     hdul.append(hdu_full)
 
 #     # ZPC values
-#     period, power, fap_zpc, oneperlevel = mlc.analyze.gen_periodogram(time, zpc)
-#     top1_zpc, peakratios = mlc.analyze.N_maxima(power, 1, period)
+#     period, power, fap_zpc, oneperlevel = clp.analyze.gen_periodogram(time, zpc)
+#     top1_zpc, peakratios = clp.analyze.N_maxima(power, 1, period)
 #     hdu_full = fits.ImageHDU()
 #     hdu_full.header['TYPE'] = 'Full ZPC curve'
 #     hdu_full.data = np.c_[period, power]
