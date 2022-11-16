@@ -11,4 +11,5 @@ setup(name='clusterprime',
       zip_safe=False,
       install_requires=['numpy == 1.19.5',
                         'astropy == 4.1',
-                        'photutils == 1.0.2'])
+                        'photutils == 1.0.2',
+                        'scipy == 1.5.4'])
