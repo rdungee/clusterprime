@@ -91,6 +91,10 @@ def zeropointcorrect(mags, completeness, nndist, cutoff=2.):
         of observations (mags.shape[1]). If a number it is treated as
         a number of observations (i.e. completeness = 3 will use any
         star with at least 3 observations)
+    nndist (numpy.ndarray of floats) - the array of the distance to the
+        nearest neighbor of that source, in units of arcsec
+    cutoff (optional, float) - the distance cutoff to use in combo with
+        nndist, default is 2
     """
     mags = mags.copy()
     if type(completeness) == int:

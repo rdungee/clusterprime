@@ -29,6 +29,8 @@ def jointables(alltab, newtab, Nobs):
     alltab (astropy.Table) - the table which is being put together that
         is to contain all the sources in the entire field
     newtab (astropy.Table) - the table which is to be appended to alltab
+    Nobs (int) - the number of obsercations to combine together into one
+        table
     """
     overlap, alli, newi = np.intersect1d(alltab["gaia_id"], newtab["gaia_id"],
                                          return_indices=True)
@@ -70,6 +72,8 @@ def generatealltab(config, tsfs, outdir, Nobs, overwrite=False):
     outdir (pathlib.Path) - the path to the output directory, where the
         all table file will be written. This function makes the
         directory if it does not already exist
+    Nobs (int) - the number of obsercations to combine together into one
+        table
     overwrite (bool, optional) - if True quietly clobbers any files that
         are already in the directory, default is False which warns the
         user that no action was taken

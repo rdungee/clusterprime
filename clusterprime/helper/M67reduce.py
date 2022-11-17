@@ -15,6 +15,67 @@ from astropy.table import Column, Table
 
 import clusterprime as clp
 
+"""
+****************************
+***** BEFORE YOU START *****
+****************************
+
+You need to have a few catalog files, and a bad pixel mask from CFHT for
+the MegaPrime instrument. Catalogs should be in a subdirectory of this
+package. (e.g., this code is in /home/rdungee/cluster/clusterprime and so
+the catalogs are located in /home/rdungee/cluster/clusterprime/catalogs,
+note that the code which is run, like this script, is assumed to be run
+in the code directory of /home/rdungee/cluster/clusterprime).
+
+At the moment, all the relevant catalog information should be in one file
+located in that directory, and so you should put care into making sure that
+catalog has all the proper information. It is expected to have all of the
+following columns listed as:
+name - description
+Note that all units are as provided by the respective data archives, I did not
+do any conversions, names are mostly the same as well
+
+source_id - the Gaia source_id for whichever data release you are using
+ra - Gaia's reported RA
+ra_error - Gaia's RA error
+dec - Gaia's reported dec
+dec_error - error of ^
+parallax - Gaia's parallax
+parallax_error - Gaia's parallax error
+pmra - Gaia's proper motion in RA
+pmra_error - error of ^
+pmdec - Gaia's proper motion in Dec
+pmdec_error - error of ^
+ruwe - Gaia's calculated RUWE value (started in EDR3)
+phot_g_mean_mag - Gaia's G mag
+phot_bp_mean_mag - Gaia's BP mag
+phot_rp_mean_mag - Gaia's RP mag
+phot_g_mean_mag_error - error on G
+phot_bp_mean_mag_error - error on BP
+phot_rp_mean_mag_error - error on RP
+ps1_id - the PS1 id of the source, found by crossmatching between the PS1 and Gaia catalogs
+g - PS1 g mag
+r - PS1 r mag
+i - PS1 i mag
+z - PS1 z mag
+g_err - error on g
+r_err - error on r
+i_err - error on i
+z_err - error on z
+kine_prob - probability of cluster membership using the proper motions and parallax
+main_seq - considered to be a main sequence, single member
+multiple - considered to be a member but to bright or too blue to be main sequence
+bright - considered to be a member, but too bright for PS1 photometry
+ra2k - the Gaia RA convereted to epoch J2000.0 for crossmatch with PS1 and MegaPrime astrometry
+de2k - the Gaia Dec convereted to epoch J2000.0 for crossmatch with PS1 and MegaPrime astrometry
+
+
+The 2nd thing of note is the bad pixel mask, this is provided by CFHT to mask out
+known bad pixels in the megaprime detector, it should be downloaded and put into
+the code base directory with the name badpixel_mask.fits
+(e.g., /home/ryan/thesis/cluster/clusterprime/badpixel_mask.fits)
+"""
+
 # Setting overwrite to False to prevent overwriting any data that might
 # already exist
 overwrite = False
@@ -42,11 +103,20 @@ apsize = 2.00
                             fits files in it. Anything directly in clustername
                             is ignored, only the files inside of a obsNNN
                             subdirectory are used.)
+                -> obsNNN (directories for each epoch of data, should contain
+                           5 fits files corresponding to the 5 images in a
+                           dither pattern that was used)
             -> clusternamereduce (holds all of the reduced data, everything in
                                   this directory is created by the pipeline
                                   itself)
                 -> analysis (contains the output of a specific pipeline run,
                              including the tables of all the timeseries data)
+                    -> lightcurves (contains the final output of the pipeline,
+                                    a fits file for each source, containing the
+                                    lightcurve itself)
+                    -> obsNNN (the reduced version of obsNNN above, contains the
+                               per image/per chip catalogs, photometry, sky sub
+                               versions etc.)
 
 """
 config = clp.Config(getcwd(), 'M67', 'added_overlap_flag', apsize)
@@ -59,8 +129,11 @@ config = clp.Config(getcwd(), 'M67', 'added_overlap_flag', apsize)
         -> clusterprime (/home/rdungee/cluster/clusterprime)              ***NOTE USER MADE***
         -> datadir (/home/rdungee/cluster/data)                           ***NOTE USER MADE***
             -> clustername (/home/rdungee/cluster/data/M67)               ***NOTE USER MADE***
+                -> obsNNN (/home/rdungee/cluster/data/M67/obsNNN)         ***NOTE USER MADE***
             -> clusternamereduced (/home/rdungee/cluster/data/M67reduce)  ***NOTE USER MADE***
                 -> analysis (/home/rdungee/cluster/data/M67reduce/added_overlap_flag)
+                    -> obsNNN (/home/rdungee/cluster/data/M67reduce/added_overlap_flag/obsNNN)
+                    -> lightcurves (/home/rdungee/cluster/data/M67reduce/added_overlap_flag/lightcurves)
 
 """
 
@@ -171,7 +244,7 @@ for catdir, outdir in trimsource:
 #  - racentroid: same but now in RA (deg)
 #  - deccentroid: same but now in Dec (deg)
 #  - gaia_id: the gaia identifier for the source, taken from crossmatching step
-#  - ps1_id: the ps1 identifier if found in the ps1 catalog, -1 otherwise
+#  - nndist: the distance in arcsec to the nearest neighboring source
 # The file is a astropy.table .ecsv format so it also has commented header lines,
 # which contain metadata:
 #  - Skymax: the peak sky value for the chip
@@ -203,7 +276,7 @@ for catdir, outdir in phot:
 #  - xcentroid: x pixel centroid of source
 #  - ycentroid: y pixel centroid of source
 #  - gaia_id: the gaia identifier for the source, taken from crossmatching step
-#  - ps1_id: the ps1 identifier if found in the ps1 catalog, -1 otherwise
+#  - nndist: the distance in arcsec to the nearest neighboring source
 #  - flux: the flux in the aperture
 #  - flux_unc: the uncertainty of the flux from error propagation (Poisson, read noise, sky)
 #  - MaskedPix?: if true, bad pixels were in the aperture
@@ -225,6 +298,10 @@ for catdir, outdir in phot:
 # *******************
 # *** EPOCH MEANS ***
 # *******************
+# Now we compute the mean magnitude for each source in a given epoch (i.e., the
+# mean of up to 5 magnitudes, creating a point in the light curve)
+
+# Directory set up as usual
 obsnums = [config.analysis / f'obs{i:03}' for i in obsis]
 epochmeans = zip(obsnums, obsnums)
 # Run the epoch mean generating
@@ -234,10 +311,36 @@ for obsdir, outdir in epochmeans:
        print(f"CCD: {ccdi:02}")
        clp.reduce.meanofpointings(config, obsdir, outdir, ccdi,
                                   overwrite=overwrite)
+# This step generates a table per ccd that sit in the epoch reduced data
+# directory (e.g. /home/rdungee/cluster/data/M67reduce/analysisname/obs000) for legacy
+# reasons it includes the aperture size (2.00 in this example script) in
+# the filename
+# Columns include:
+#  - gaia_id: the gaia identifier for the source, taken from crossmatching step
+#  - magavg: mean mag_inst value
+#  - magsdv: the standard deviation of the N measurements
+#  - magunc: the estimated uncertainty using error propagation
+#  - nndist: the distance in arcsec to the nearest neighboring source
+#  - Ninmean: the number of mag_inst values used in computing the above (i.e.,
+#             how many didn't have bad pixels/weren't partially on chip/no saturation)
+# The file is a astropy.table .ecsv format so it also has commented header lines,
+# which contain metadata:
+#  - MJD-OBS: exposure start time in MJD format
+#  - DATE-OBS: the date of the observation in UTC
+#  - UTC-OBS: the exposure start time in UTC
+#  - Seeing: the seeing FWHM in pixels of that observation
+
 
 # ****************************
 # *** BY CHIP LIGHT CURVES ***
 # ****************************
+# Now we run through step of collecting all the indiviual epochs of photometry
+# into one table that covers the full time series. This step creates two tables
+# per chip in the detector, one that contains the time series photometry itself
+# and one that contains the time series of the "meta" values, e.g., the median
+# seeing for each epoch, the zero-point correction used for that epoch, etc.
+# This step also applies the zero-point correction to put all the epochs in the
+# same system before any furhter analysis.
 bychiplcs = sorted(config.analysis.glob('obs'+3*'[0-9]'))
 outdir = config.analysis
 print("Making per chip time series tables")
@@ -245,179 +348,81 @@ for ccdi in ccdis:
   print(f"CCD: {ccdi:02}")
   clp.reduce.buildtimeseries(config, bychiplcs, outdir, ccdi, 
                              overwrite=overwrite)
+# First output table is ccdMM_apsize_ts.ecsv, it has the following columns:
+# - gaia_id - the source's gaia EDR3 id
+# - obsNNN_avg - the mean magnitude for obsNNN one column per obs that exists
+# - obsNNN_sdv - the standard deviation for obsNNN one column per obs that exists
+# - obsNNN_unc - the estimated uncertainty for obsNNN one column per obs that exists
+# - obsNNN_Ninavg - the N used in the avg for obsNNN one column per obs that exists
+# - nndist - nearest neighbor in arcseconds for that source
+# Second output is table ccdMM_metatable.ecsv, it has the following columns:
+# - Obs - the obs number (for M67 this was the integer 0-125)
+# - MJD-OBS - MJD of the observation, taken as the median of the values for the
+#             pointings that went into the epoch
+# - DATE-OBS - UT Date of the epoch
+# - UTC-OBS - UT time of the epoch, taken as the median of the exposure start
+#             times for each pointing in the epoch
+# - Seeing - The median seeing of the pointings in that epoch
+# - ZP_Corr - the zero-point correction applied to this epoch
+# - aperrs - the radius of the apertures used for this epoch
 
 # ***************
 # *** ALL TAB ***
 # ***************
+# This step simply stacks all the by chip tables into one table that contains
+# all the time series photometry for all the sources, as such it has the same
+# columns
+# - gaia_id - the source's gaia EDR3 id
+# - obsNNN_avg - the mean magnitude for obsNNN one column per obs that exists
+# - obsNNN_sdv - the standard deviation for obsNNN one column per obs that exists
+# - obsNNN_unc - the estimated uncertainty for obsNNN one column per obs that exists
+# - obsNNN_Ninavg - the N used in the avg for obsNNN one column per obs that exists
+# - nndist - nearest neighbor in arcseconds for that source
 alltab = sorted(config.analysis.glob('ccd*_ts.ecsv'))
 print("Generating all table")
-clp.reduce.generatealltab(config, alltab, config.analysis, 106,
+# ***NOTE*** this call needs to be modified if there are not 126 observations in total
+clp.reduce.generatealltab(config, alltab, config.analysis, 126,
                         overwrite=overwrite)
 
 # ****************
 # *** LC FILES ***
 # ****************
+# The final step of the reduction pipeline: generating an lc file for each source
+# lc files are fits files, the 0th extension contains the light curve and
+# current analysis steps add the periodogram as the 1st extension. The data on
+# the 0th extension are shaped (N, 10) where N is the number of observations
+# so each slice are as follows:
+# given hdul = astropy.io.fits.open("examplelc.fits")
+# hdul[0].data[:,0] = time of obs in MJD
+# hdul[0].data[:,1] = flux [ppm]
+# hdul[0].data[:,2] = estimated uncertainty [ppm]
+# hdul[0].data[:,3] = obs number (integer value)
+# hdul[0].data[:,4] = magnitude [instrumental]
+# hdul[0].data[:,5] = estimated uncertainty [mag]
+# hdul[0].data[:,6] = standard deviation [mag]
+# hdul[0].data[:,7] = seeing [pixels]
+# hdul[0].data[:,8] = zero-point correction [mag]
+# hdul[0].data[:,9] = aperture radius [pixels]
+# All of the above is included in the header, as well as the following additional
+# information, as long as it was all available in the catalogs used during the
+# data reduction
+# GAIA_ID, PS1_ID, RA, RA_ERR, DEC, DEC_ERROR - self explanatory
+# PARA, PARA_ERR - the parallax of the target and the parallax error
+# PMRA, PMRA_ERR, PMDE, PMDE_ERR - proper motions
+# GAIA_G, GAIA_BP, GAIA_RP, G_G_ERR, G_BP_ERR, G_RP_ERR - gaia phot + errors
+# PS1_G, PS1_R, PS1_I, PS1_Z, P_G_ERR, P_R_ERR, P_I_ERR, P_Z_ERR - ps1 phot + errors
+# KINEPROB - kinematic cluster membership probability
+# MAINSEQ - tagged as a main sequence member
+# MULTI - tagged as a potential binary
+# BRIGHT - too bright for PS1 photometry
+# COMPLETE - fraction of the light curve that is filled in
+# NNDIST - distance to nearest neighbor in arcsec
+
 datatabfs = sorted(config.analysis.glob('ccd*_ts.ecsv'))
 metatabfs = sorted(config.analysis.glob('ccd*_metatable.ecsv'))
 indivlcs = list(zip(datatabfs, metatabfs))
 print("Generating Light Curve files")
 clp.reduce.generatelcfs(config, indivlcs, config.analysis / 'lightcurves')
-
-# ********************
-# *** PERIODOGRAMS ***
-# ********************
-# maskout = []
-# lcfs = list((config.analysis / 'lightcurves').glob('*.fits'))
-# # lcfs = [config.analysis / 'lightcurves/604705870286863872.fits',
-#         # config.analysis / 'lightcurves/604705904646604032.fits']
-
-# outdir = config.analysis / 'periodograms_w_subseries'
-# outdir.mkdir(exist_ok=True)
-# (outdir / "unphased").mkdir(exist_ok=True)
-# (outdir / "mags").mkdir(exist_ok=True)
-# (outdir / "seeing").mkdir(exist_ok=True)
-# (outdir / "zpc").mkdir(exist_ok=True)
-
-# outf = outdir / 'found_peaks.ecsv'
-# outtab = Table(names=("gaia_id"
-#                       , "period0_whole", "FAP0_whole", "period1_whole", "period2_whole"
-#                       , "period0_ZPC", "FAP0_ZPC"
-#                       , "period0_see", "FAP0_see"
-#                       , "period0_sub0", "FAP0_sub0", "period1_sub0", "period2_sub0"
-#                       , "period0_sub1", "FAP0_sub1", "period1_sub1", "period2_sub1"
-#                       , "period0_sub2", "FAP0_sub2", "period1_sub2", "period2_sub2"),
-#                dtype=("i8"
-#                       , "f8", "f8", "f8", "f8"
-#                       , "f8", "f8"
-#                       , "f8", "f8"
-#                       , "f8", "f8", "f8", "f8"
-#                       , "f8", "f8", "f8", "f8"
-#                       , "f8", "f8", "f8", "f8"))
-
-# for lcf in lcfs:
-#     print(f"Generating periodograms for {lcf.stem}...")
-
-#     hdul = fits.open(lcf)
-#     # Completeness check, being more strict this time to mitigate
-#     # problems with pulling out the subseries
-#     if hdul[0].header['COMPLETE'] < 0.75:
-#         continue
-#     time, flux, err = hdul[0].data[:,1], hdul[0].data[:,2], hdul[0].data[:,3]
-#     see, zpc = hdul[0].data[:,5], hdul[0].data[:,6]
-
-#     # Full light curve
-#     period, power, fap_full, oneperlevel = clp.analyze.gen_periodogram(time, flux, err)
-#     hdu_full = fits.ImageHDU()
-#     hdu_full.header['TYPE'] = 'Full light curve'
-#     hdu_full.data = np.c_[period, power]
-#     hdul.append(hdu_full)
-#     top3_full, peakratios = clp.analyze.N_maxima(power, 3, period)
-
-#     clp.analyze.gen_figure(time, flux, period, power, oneperlevel
-#                            , fap_full, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                            , 'Inst. Mag.', 'Time [MJD]', 'mags'
-#                            , (outdir / 'unphased'), err)
-#     phs, foldflux, folderr = clp.analyze.phase_fold(time, flux, err, top3_full[-1])
-#     clp.analyze.gen_figure(phs, foldflux, period, power, oneperlevel
-#                            , fap_full, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                            , 'Inst. Mag.', 'Phase', 'folded'
-#                            , (outdir / 'mags'), folderr)
-
-#     minper, maxper = 2.5, 150
-#     maxfreq, minfreq = 1/minper, 1/maxper
-#     freqgrid = np.linspace(minfreq, maxfreq, 10000)
-
-#     # block 1: time < 58680
-#     sub0_mask = time < 58680
-#     sub0_time, sub0_flux, sub0_err = time[sub0_mask], flux[sub0_mask], err[sub0_mask]
-#     if sub0_flux.size <= 2:
-#         period = 1/freqgrid
-#         power_sub0 = np.zeros(period.size)
-#         top3_sub0 = np.zeros(3)
-#         fap_sub0 = 100.
-#     else:
-#         period, power_sub0, fap_sub0, oneperlevel = clp.analyze.gen_periodogram(sub0_time, sub0_flux, sub0_err, freq=freqgrid)
-#         top3_sub0, peakratios = clp.analyze.N_maxima(power_sub0, 3, period)
-
-#         clp.analyze.gen_figure(sub0_time, sub0_flux, period, power_sub0, oneperlevel
-#                             , fap_sub0, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub0'
-#                             , (outdir / 'unphased'), sub0_err)
-#         phs, foldflux, folderr = clp.analyze.phase_fold(sub0_time, sub0_flux, sub0_err, top3_sub0[-1])
-#         clp.analyze.gen_figure(phs, foldflux, period, power_sub0, oneperlevel
-#                             , fap_sub0, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Phase', 'folded_sub0'
-#                             , (outdir / 'mags'), folderr)
-
-#     # block 2: 58680 < time < 59060
-#     sub1_mask = (time > 58680) & (time < 59060)
-#     sub1_time, sub1_flux, sub1_err = time[sub1_mask], flux[sub1_mask], err[sub1_mask]
-#     if sub1_flux.size <= 2:
-#         power_sub1 = np.zeros(period.size)
-#         top3_sub1 = np.zeros(3)
-#         fap_sub1 = 100.
-#     else:
-#         period, power_sub1, fap_sub1, oneperlevel = clp.analyze.gen_periodogram(sub1_time, sub1_flux, sub1_err, freq=freqgrid)
-#         top3_sub1, peakratios = clp.analyze.N_maxima(power_sub1, 3, period)
-
-#         clp.analyze.gen_figure(sub1_time, sub1_flux, period, power_sub1, oneperlevel
-#                             , fap_sub1, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub1'
-#                             , (outdir / 'unphased'), sub1_err)
-#         phs, foldflux, folderr = clp.analyze.phase_fold(sub1_time, sub1_flux, sub1_err, top3_sub1[-1])
-#         clp.analyze.gen_figure(phs, foldflux, period, power_sub1, oneperlevel
-#                             , fap_sub1, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Phase', 'folded_sub1'
-#                             , (outdir / 'mags'), folderr)
-
-#     # block 3: time > 59060
-#     sub2_mask = time > 59060
-#     sub2_time, sub2_flux, sub2_err = time[sub2_mask], flux[sub2_mask], err[sub2_mask]
-#     if sub2_flux.size <= 2:
-#         power_sub2 = np.zeros(period.size)
-#         top3_sub2 = np.zeros(3)
-#         fap_sub2 = 100.
-#     else:
-#         period, power_sub2, fap_sub2, oneperlevel = clp.analyze.gen_periodogram(sub2_time, sub2_flux, sub2_err, freq=freqgrid)
-#         hdu_sub = fits.ImageHDU()
-#         hdu_sub.header['TYPE'] = 'Subsets of LC'
-#         hdu_sub.data = np.c_[period, power_sub0, power_sub1, power_sub2]
-#         hdul.append(hdu_sub)
-#         top3_sub2, peakratios = clp.analyze.N_maxima(power_sub2, 3, period)
-
-#         clp.analyze.gen_figure(sub2_time, sub2_flux, period, power_sub2, oneperlevel
-#                             , fap_sub2, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Time [MJD]', 'mags_sub2'
-#                             , (outdir / 'unphased'), sub2_err)
-#         phs, foldflux, folderr = clp.analyze.phase_fold(sub2_time, sub2_flux, sub2_err, top3_sub2[-1])
-#         clp.analyze.gen_figure(phs, foldflux, period, power_sub2, oneperlevel
-#                             , fap_sub2, hdul[0].header['GAIA_ID'], hdul[0].header['COMPLETE']
-#                             , 'Inst. Mag.', 'Phase', 'folded_sub2'
-#                             , (outdir / 'mags'), folderr)
-
-#     # Seeing values
-#     period, power, fap_see, oneperlevel = clp.analyze.gen_periodogram(time, see)
-#     top1_see, peakratios = clp.analyze.N_maxima(power, 1, period)
-#     hdu_full = fits.ImageHDU()
-#     hdu_full.header['TYPE'] = 'Full seeing curve'
-#     hdu_full.data = np.c_[period, power]
-#     hdul.append(hdu_full)
-
-#     # ZPC values
-#     period, power, fap_zpc, oneperlevel = clp.analyze.gen_periodogram(time, zpc)
-#     top1_zpc, peakratios = clp.analyze.N_maxima(power, 1, period)
-#     hdu_full = fits.ImageHDU()
-#     hdu_full.header['TYPE'] = 'Full ZPC curve'
-#     hdu_full.data = np.c_[period, power]
-#     hdul.append(hdu_full)
-
-#     newrow = (hdul[0].header['GAIA_ID']
-#              , top3_full[-1], fap_full, top3_full[-2], top3_full[-3]
-#              , top1_see[0], fap_see
-#              , top1_zpc[0], fap_zpc
-#              , top3_sub0[-1], fap_sub0, top3_sub0[-2], top3_sub0[-3]
-#              , top3_sub1[-1], fap_sub1, top3_sub1[-2], top3_sub1[-3]
-#              , top3_sub2[-1], fap_sub2, top3_sub2[-2], top3_sub2[-3])
-#     outtab.add_row(newrow)
-#     outtab.write(outf, format="ascii.ecsv", overwrite=True)
-#     hdul.writeto(lcf, overwrite=True)
+# output files are located in the lightcurves subdir,
+# e.g., /home/rdungee/cluster/M67reduce/analysisname/lightcurves
+# file names are the Gaia ID, e.g., 604896498115959296.fits
