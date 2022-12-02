@@ -27,6 +27,11 @@ the catalogs are located in /home/rdungee/cluster/clusterprime/catalogs,
 note that the code which is run, like this script, is assumed to be run
 in the code directory of /home/rdungee/cluster/clusterprime).
 
+Also note that the pipeline input is the partially reduced data generally
+provided by CFHT. Specifically this was written for the output of version 3.0
+of the Elixir pipeline, which takes care of the flat-fielding, fringe correction
+and bias subtraction for the end user.
+
 At the moment, all the relevant catalog information should be in one file
 located in that directory, and so you should put care into making sure that
 catalog has all the proper information. It is expected to have all of the
