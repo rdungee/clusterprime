@@ -20,8 +20,8 @@ import clusterprime as clp
 ***** BEFORE YOU START *****
 ****************************
 
-You need to have a few catalog files, and a bad pixel mask from CFHT for
-the MegaPrime instrument. Catalogs should be in a subdirectory of this
+You need to have a catalog file, and a bad pixel mask from CFHT for
+the MegaPrime instrument. This file should be in a subdirectory of this
 package. (e.g., this code is in /home/rdungee/cluster/clusterprime and so
 the catalogs are located in /home/rdungee/cluster/clusterprime/catalogs,
 note that the code which is run, like this script, is assumed to be run
