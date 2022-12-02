@@ -221,7 +221,10 @@ for chipdir, outdir in zip(chipdirs, chipdirs):
 # readcatalog contained in aperture.py (clusterprime/reduce/photometry/aperture.py)
 # In there the catalog is hardcoded in the first line of the function as
 # cat = Table.read(f"catalogs/{cluster}_gaiaedr3_plus_ps1.csv")
-# a catalog file that you must construct yourself, it needs to have RA/Dec in
+# an example of this file is included in the dropbox which also contains
+# the bad pixel mask. You may construct such a catalog yourself, though
+# a future version (writing this on 02-Dec-2022) will include code which
+# will assist you with this. it needs to have RA/Dec in
 # epoch J2000.0 for comparison with megaprime data, it currently assumes the
 # column names are "ra2k" and "de2k" for them respectively
 
