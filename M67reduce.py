@@ -384,6 +384,14 @@ print("Generating all table")
 clp.reduce.generatealltab(config, alltab, config.analysis, 126,
                         overwrite=overwrite)
 
+'''
+***** DIAGNOSTICS *****
+At this point you have generated all of the data needed to run the sidm_mids.py
+script contained in the plotting subdirectory. This figure is the check on
+photometric precision that we used, for details see Fig. 2 of the M67 paper
+(Dungee et al. 2022) and its related discussion.
+'''
+
 # ****************
 # *** LC FILES ***
 # ****************
